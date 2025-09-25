@@ -35,77 +35,32 @@ def get_current_prices(workbook):
     return current_prices
 
 def update_prices(workbook, new_prices):
-    """Update D4-D7 cells in Prices sheet and ensure calculations update"""
+    """Update D4-D7 cells in Prices sheet without modifying any formulas"""
     if 'Prices' not in workbook.sheetnames:
         return False
     
     prices_sheet = workbook['Prices']
+    
+    # Simply update the values - don't touch any formulas anywhere
     prices_sheet['D4'] = new_prices['D4']
     prices_sheet['D5'] = new_prices['D5']
     prices_sheet['D6'] = new_prices['D6']
     prices_sheet['D7'] = new_prices['D7']
     
-    # Set calculation mode to automatic to ensure formulas recalculate
-    workbook.calculation.calcMode = 'auto'
-    
     return True
 
 def export_sheet_to_csv(workbook, sheet_name):
-    """Export specified sheet to CSV bytes with proper formula calculation"""
+    """Export specified sheet to CSV - formulas will show as formulas in CSV if not calculated"""
     if sheet_name not in workbook.sheetnames:
         return None
     
-    # Create a temporary file to save the workbook
     with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
         try:
-            # First save the workbook with updated values
+            # Save the workbook with updated values
             workbook.save(tmp_file.name)
             
-            # Try multiple approaches to get calculated values
-            try:
-                # Method 1: Use xlwings if available (best for calculation)
-                import xlwings as xw
-                app = xw.App(visible=False)
-                wb = app.books.open(tmp_file.name)
-                wb.app.calculation = 'automatic'
-                wb.save()
-                wb.close()
-                app.quit()
-            except ImportError:
-                # Method 2: Use openpyxl with data_only and manual calculation trigger
-                pass
-            
-            # Load with openpyxl data_only=True to get values
-            calc_wb = openpyxl.load_workbook(tmp_file.name, data_only=True)
-            
-            # If data_only still shows None, try to extract raw data and formulas
-            if sheet_name in calc_wb.sheetnames:
-                sheet = calc_wb[sheet_name]
-                
-                # Check if we're getting None values and try alternative approach
-                has_none_values = False
-                for row in sheet.iter_rows(min_row=1, max_row=min(10, sheet.max_row)):
-                    for cell in row:
-                        if cell.value is None and cell.coordinate in ['A1', 'B1', 'C1']:  # Check header area
-                            continue
-                        elif cell.value is None:
-                            has_none_values = True
-                            break
-                    if has_none_values:
-                        break
-                
-                if has_none_values:
-                    # Fallback: load without data_only to preserve formulas, then try pandas with engine
-                    calc_wb.close()
-                    df = pd.read_excel(tmp_file.name, sheet_name=sheet_name, engine='openpyxl')
-                else:
-                    # Save the calculated workbook
-                    calc_wb.save(tmp_file.name)
-                    calc_wb.close()
-                    df = pd.read_excel(tmp_file.name, sheet_name=sheet_name, engine='openpyxl')
-            else:
-                calc_wb.close()
-                return None
+            # Read with pandas - this preserves the current state
+            df = pd.read_excel(tmp_file.name, sheet_name=sheet_name, engine='openpyxl')
             
             # Convert to CSV
             csv_string = df.to_csv(index=False)
@@ -113,16 +68,9 @@ def export_sheet_to_csv(workbook, sheet_name):
             
         except Exception as e:
             st.error(f"Export error: {e}")
-            # Fallback: try basic export
-            try:
-                df = pd.read_excel(tmp_file.name, sheet_name=sheet_name)
-                csv_string = df.to_csv(index=False)
-                return csv_string.encode()
-            except:
-                return None
+            return None
             
         finally:
-            # Clean up temp file
             if os.path.exists(tmp_file.name):
                 try:
                     os.unlink(tmp_file.name)
@@ -261,37 +209,32 @@ def main():
         if 'Export' in workbook.sheetnames:
             st.write("**Export Sheet Available** ✅")
             
-            # Preview Export sheet (with updated values)
+            # Preview Export sheet
             with st.expander("👁️ Preview Export Sheet"):
                 try:
-                    # Create temp file to read with pandas
                     with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                         workbook.save(tmp.name)
-                        
-                        # Try to read with calculated values
-                        try:
-                            preview_wb = openpyxl.load_workbook(tmp.name, data_only=True)
-                            preview_wb.save(tmp.name)
-                            preview_wb.close()
-                            preview_df = pd.read_excel(tmp.name, sheet_name='Export')
-                        except:
-                            # Fallback to regular reading
-                            preview_df = pd.read_excel(tmp.name, sheet_name='Export')
+                        preview_df = pd.read_excel(tmp.name, sheet_name='Export')
                         
                         st.dataframe(preview_df.head(10), use_container_width=True)
                         
-                        # Show info about Variant Price column if it exists
+                        # Show info about the data
                         if 'Variant Price' in preview_df.columns:
                             variant_price_col = preview_df['Variant Price']
-                            non_null_count = variant_price_col.count()
-                            st.write(f"**Variant Price column**: {non_null_count} calculated values out of {len(variant_price_col)} rows")
                             
-                            if non_null_count == 0:
-                                st.warning("⚠️ Variant Price column is empty. This might indicate formula calculation issues.")
-                                st.write("**Troubleshooting tips:**")
-                                st.write("• Ensure the Export sheet formulas reference the correct Prices sheet cells")
-                                st.write("• Check that formulas use the format: `=Prices!D4`, `=Prices!D5`, etc.")
-                                st.write("• Verify the Prices sheet is named exactly 'Prices'")
+                            # Count different types of values
+                            numeric_count = pd.to_numeric(variant_price_col, errors='coerce').count()
+                            formula_count = sum(1 for x in variant_price_col if isinstance(x, str) and x.startswith('='))
+                            total_rows = len(variant_price_col.dropna())
+                            
+                            st.write(f"**Variant Price column status:**")
+                            st.write(f"• {numeric_count} calculated numeric values")
+                            st.write(f"• {formula_count} formulas (need Excel to calculate)")
+                            st.write(f"• {total_rows} total non-empty cells")
+                            
+                            if formula_count > 0:
+                                st.info("💡 **Note**: Formulas in the Export sheet require Excel to calculate. The CSV will contain the formulas as text unless opened in Excel first.")
+                                st.write("**Recommendation**: Open the downloaded Excel file in Excel, press Ctrl+Shift+F9 to recalculate, then save and export to CSV from Excel.")
                         
                         if len(preview_df) > 10:
                             st.write(f"... and {len(preview_df) - 10} more rows")
@@ -299,21 +242,45 @@ def main():
                 except Exception as e:
                     st.error(f"Error previewing: {e}")
             
-            # Download button
-            try:
-                csv_data = export_sheet_to_csv(workbook, 'Export')
-                if csv_data:
-                    st.download_button(
-                        label="📥 Download Export Sheet as CSV",
-                        data=csv_data,
-                        file_name="export_data.csv",
-                        mime="text/csv",
-                        type="primary"
-                    )
-                else:
-                    st.error("❌ Failed to export CSV")
-            except Exception as e:
-                st.error(f"❌ Export error: {e}")
+            # Download buttons
+            st.write("**Download Options:**")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Download updated Excel file
+                with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+                    workbook.save(tmp.name)
+                    with open(tmp.name, 'rb') as f:
+                        excel_data = f.read()
+                    os.unlink(tmp.name)
+                
+                st.download_button(
+                    label="📊 Download Updated Excel File",
+                    data=excel_data,
+                    file_name="updated_workbook.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Download the Excel file with updated prices. Open in Excel to see calculated values."
+                )
+            
+            with col2:
+                # Download CSV (may contain formulas)
+                try:
+                    csv_data = export_sheet_to_csv(workbook, 'Export')
+                    if csv_data:
+                        st.download_button(
+                            label="📥 Download Export Sheet as CSV",
+                            data=csv_data,
+                            file_name="export_data.csv",
+                            mime="text/csv",
+                            help="CSV export - formulas may appear as text"
+                        )
+                    else:
+                        st.error("❌ Failed to export CSV")
+                except Exception as e:
+                    st.error(f"❌ Export error: {e}")
+            
+            st.info("💡 **Best Practice**: Download the Excel file first, open it in Excel to ensure formulas calculate, then export to CSV from Excel if needed.")
         else:
             st.warning("⚠️ 'Export' sheet not found")
             st.write("Available sheets:")
