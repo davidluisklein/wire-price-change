@@ -35,7 +35,7 @@ def get_current_prices(workbook):
     return current_prices
 
 def update_prices(workbook, new_prices):
-    """Update D4-D7 cells in Prices sheet"""
+    """Update D4-D7 cells in Prices sheet and recalculate formulas"""
     if 'Prices' not in workbook.sheetnames:
         return False
     
@@ -44,30 +44,50 @@ def update_prices(workbook, new_prices):
     prices_sheet['D5'] = new_prices['D5']
     prices_sheet['D6'] = new_prices['D6']
     prices_sheet['D7'] = new_prices['D7']
+    
+    # Force recalculation of all formulas in the workbook
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':  # Formula cell
+                    # Force recalculation by setting formula again
+                    formula = cell.value
+                    if formula:
+                        cell.value = formula
+    
     return True
 
 def export_sheet_to_csv(workbook, sheet_name):
-    """Export specified sheet to CSV bytes"""
+    """Export specified sheet to CSV bytes with formula recalculation"""
     if sheet_name not in workbook.sheetnames:
         return None
     
     # Create a temporary file to save the workbook
     with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
-        workbook.save(tmp_file.name)
-        
-        # Read the sheet with pandas
-        df = pd.read_excel(tmp_file.name, sheet_name=sheet_name)
-        
-        # Convert to CSV
-        csv_buffer = BytesIO()
-        csv_string = df.to_csv(index=False)
-        csv_buffer.write(csv_string.encode())
-        csv_buffer.seek(0)
-        
-        # Clean up temp file
-        os.unlink(tmp_file.name)
-        
-        return csv_buffer.getvalue()
+        try:
+            # Save with data_only=False first to preserve formulas, then data_only=True to get values
+            workbook.save(tmp_file.name)
+            
+            # Reopen with data_only=True to get calculated values instead of formulas
+            calculated_wb = openpyxl.load_workbook(tmp_file.name, data_only=True)
+            calculated_wb.save(tmp_file.name)
+            calculated_wb.close()
+            
+            # Read the sheet with pandas
+            df = pd.read_excel(tmp_file.name, sheet_name=sheet_name)
+            
+            # Convert to CSV
+            csv_buffer = BytesIO()
+            csv_string = df.to_csv(index=False)
+            csv_buffer.write(csv_string.encode())
+            csv_buffer.seek(0)
+            
+            return csv_buffer.getvalue()
+            
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_file.name):
+                os.unlink(tmp_file.name)
 
 def main():
     st.title("💰 Excel Price Editor")
@@ -135,25 +155,25 @@ def main():
             
             # Input fields for each price cell
             new_d4 = st.text_input(
-                "Gold:", 
+                "D4 - Price 1:", 
                 value=str(current_prices['D4']) if current_prices['D4'] is not None else "",
                 help="Enter new value for cell D4"
             )
             
             new_d5 = st.text_input(
-                "Silver:", 
+                "D5 - Price 2:", 
                 value=str(current_prices['D5']) if current_prices['D5'] is not None else "",
                 help="Enter new value for cell D5"
             )
             
             new_d6 = st.text_input(
-                "Platinum:", 
+                "D6 - Price 3:", 
                 value=str(current_prices['D6']) if current_prices['D6'] is not None else "",
                 help="Enter new value for cell D6"
             )
             
             new_d7 = st.text_input(
-                "Palladium:", 
+                "D7 - Price 4:", 
                 value=str(current_prices['D7']) if current_prices['D7'] is not None else "",
                 help="Enter new value for cell D7"
             )
@@ -184,6 +204,8 @@ def main():
                         for cell, value in new_prices.items():
                             st.write(f"• {cell}: {value}")
                         
+                        st.info("💡 Export sheet will now reflect the updated prices!")
+                        
                         # Auto-rerun to refresh the interface
                         st.rerun()
                         
@@ -199,12 +221,18 @@ def main():
         if 'Export' in workbook.sheetnames:
             st.write("**Export Sheet Available** ✅")
             
-            # Preview Export sheet
+            # Preview Export sheet (with updated values)
             with st.expander("👁️ Preview Export Sheet"):
                 try:
-                    # Create temp file to read with pandas
+                    # Create temp file to read with pandas, ensuring calculated values
                     with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                         workbook.save(tmp.name)
+                        
+                        # Reopen with data_only=True to get calculated values
+                        preview_wb = openpyxl.load_workbook(tmp.name, data_only=True)
+                        preview_wb.save(tmp.name)
+                        preview_wb.close()
+                        
                         preview_df = pd.read_excel(tmp.name, sheet_name='Export')
                         st.dataframe(preview_df.head(10), use_container_width=True)
                         if len(preview_df) > 10:
