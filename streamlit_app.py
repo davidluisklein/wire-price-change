@@ -143,25 +143,25 @@ def main():
             
             # Input fields for each price cell
             new_d4 = st.text_input(
-                "D4 - Price 1:", 
+                "Gold:", 
                 value=str(current_prices['D4']) if current_prices['D4'] is not None else "",
                 help="Enter new value for cell D4"
             )
             
             new_d5 = st.text_input(
-                "D5 - Price 2:", 
+                "Silver:", 
                 value=str(current_prices['D5']) if current_prices['D5'] is not None else "",
                 help="Enter new value for cell D5"
             )
             
             new_d6 = st.text_input(
-                "D6 - Price 3:", 
+                "Platinum:", 
                 value=str(current_prices['D6']) if current_prices['D6'] is not None else "",
                 help="Enter new value for cell D6"
             )
             
             new_d7 = st.text_input(
-                "D7 - Price 4:", 
+                "Palladium:", 
                 value=str(current_prices['D7']) if current_prices['D7'] is not None else "",
                 help="Enter new value for cell D7"
             )
